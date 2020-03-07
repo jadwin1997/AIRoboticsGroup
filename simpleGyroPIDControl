@@ -1,0 +1,105 @@
+//Drive Straight w/Gyro (MPU-6050)
+#include<Wire.h>
+
+const int MPU_addr=0x68;  // I2C address of the MPU-6050
+int16_t GyZ;
+float lastStraight=0,elapsedTime, currentTime, previousTime,angle = 0, target_angle,offset = 0,iValue,iModifier = 0.01;
+float acceptableAngle = 0.3;
+uint8_t targetSpeed = 150;
+uint8_t leftMotor = targetSpeed,rightMotor = targetSpeed;
+
+int8_t adjustmentSpeed, pValue = 5;
+int motors[2]; 
+
+
+void setup(){
+  //I2C com with gyro
+  Wire.begin();
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x6B);  // PWR_MGMT_1 register
+  Wire.write(0);     // set to zero (wakes up the MPU-6050)
+  Wire.endTransmission(true);
+  Serial.begin(9600);
+
+  //button
+  pinMode(7,INPUT_PULLUP);
+  //calibrate offset
+  offset = calibrate();
+  motors[0] = leftMotor;
+  motors[1] = rightMotor;
+}
+
+//calibrate by taking 1000 measurements and averaging them. Then, we will subtract that value from our measurements later. 
+float calibrate(){
+//  leftMotor -> run(RELEASE);
+//  rightMotor -> run(RELEASE);
+  delay(500);
+  float GyZ_avg=0;
+  for(int x=0;x<1000;x++){
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x47);  // starting with register 0x47 (GYRO_ZOUT_H)
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr,2,true);  // request a total of 2 registers
+  GyZ=(Wire.read()<<8|Wire.read())/131.0;  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+  GyZ_avg=GyZ+GyZ_avg;
+  }
+  GyZ_avg = GyZ_avg/1000.0;
+  return GyZ_avg;
+}
+
+float getAngle(){
+  previousTime = currentTime;        // Previous time is stored before the actual time read
+  currentTime = millis();            // Current time actual time read
+  elapsedTime = (currentTime - previousTime) / 1000; // Divide by 1000 to get seconds
+
+  //Start I2C transmission with gyro
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x47);  // starting with register 0x47 (GYRO_ZOUT)
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr,2,true);  // request a total of 2 registers
+  GyZ=(Wire.read()<<8|Wire.read())/200;  // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L) (16 bit number stored in 2 8 bit registers)
+  //subtract offset 
+  GyZ=GyZ-offset;
+  //convert from rad/s to rad
+  angle = angle + GyZ*elapsedTime;
+  return angle;
+  //Serial.print("angle = "); Serial.println(angle);
+}
+
+int driveStraight(int * motors){
+  angle = getAngle();
+
+  //calulate integral value (error over time correction)
+  if(abs(angle)<acceptableAngle){
+    lastStraight = millis();
+    iValue = 0;
+  }
+  else{
+    iValue = millis()-lastStraight;
+    iValue = iValue * iModifier;
+    if(angle < 0) iValue = -iValue;
+  }
+
+  
+  //"saturation" add with the 8 bit unsigned motor speeds. Add integral value as well. 
+  leftMotor = constrain(targetSpeed + angle * pValue + iValue ,0 ,255);
+  rightMotor = constrain(targetSpeed - (angle * pValue) - iValue, 0,255);
+  
+  motors[0] = leftMotor;
+  motors[1] = rightMotor;
+  
+  Serial.print("Left Motor: ");
+  Serial.print(leftMotor);
+  Serial.print(" Right Motor: ");
+  Serial.print(rightMotor);
+  Serial.print(" angle: ");
+  Serial.println(angle);
+  //return [leftMotor,rightMotor];
+}
+
+
+void loop(){
+ driveStraight(motors);
+  delay(1);
+}
+
